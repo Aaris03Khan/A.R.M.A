@@ -5,7 +5,7 @@ const jwt = require("jsonwebtoken");
 const fs = require("fs");
 const bcrypt = require("bcryptjs");
 const path = require("path");
-
+const mailSender = require('./mail-sender.js')
 //--------------------------------------------------------//
 //-----------TOKEN HANDLING-------------------------------//
 //--------------------------------------------------------//
@@ -136,6 +136,127 @@ async function checkFacultyPassword(faculty_roll, password) {
   });
 }
 
+async function generateTempPassword()
+{
+	return new Promise((resolve, reject)=>{
+		let tempPass = "";
+  		for (let a = 0; a < 10; a++) {
+  		  tempPass += String(Math.round(Math.random() * 10)%10);
+  		}
+  		return resolve(tempPass);
+	})
+}
+
+async function forgotPassword(userType, username, reg_email)
+{
+	return new Promise((resolve, reject)=>{
+		
+			if(userType == "FACULTY")
+			{
+				//query the username in the faculty table
+				var client = new Client();
+				client.connect();
+				client.query("SELECT email FROM faculty WHERE faculty_roll=$1",[username])
+				.then(data=>{
+					if(data.rows.length == 0)
+					{
+						client.end();
+						return reject("Invalid faculty roll!");
+					}
+					var email = data.rows[0].email;
+					var tempPass = "";
+					if(email !=reg_email) return reject("Registered email is Invalid!");
+					generateTempPassword()
+					.then(password=>{
+						tempPass = password;
+						return hashPassword(password)
+					})
+					.then(hash=>{
+						client.query("UPDATE faculty SET pwd_hash=$1 WHERE faculty_roll=$2",[hash,username])
+						.then(state=>{
+							//nothing. Password is updated.
+						})
+						.catch(error=>{
+						client.end();
+							console.log(error)
+							return reject("Database error!");
+						})
+						return mailSender.sendMail(
+							"ARMA PASSWORD RESET",
+							("Hey there!, You can login to ARMA using the temporary password: " + tempPass),
+							email
+						);
+					})
+					.then((mailStatus)=>{
+						client.end();
+						return resolve();
+					})
+					.catch(error=>{
+						client.end();
+						console.log(error)
+						return reject("error updating new password!");
+					})
+				})
+				.catch(error=>{
+						client.end();
+					console.log(error);
+					return reject(error);
+				})
+			}
+			else if(userType == "FORUM")
+			{
+				//query the username in the forums table
+				var client = new Client();
+				client.connect();
+				client.query("SELECT email FROM forums WHERE forum_name=$1",[username])
+				.then(data=>{
+					if(data.rows.length == 0)
+					{
+						return reject("Invalid forum name!");
+					}
+					var email = data.rows[0].email;
+					var tempPass = ""
+					if(email !=reg_email) return reject("Registered email is Invalid!");
+					generateTempPassword()
+					.then(password=>{
+						tempPass = password;
+						return hashPassword(password)
+					})
+					.then(hash=>{
+						client.query("UPDATE forums SET pwd_hash=$1 WHERE forum_name=$2",[hash, username])
+						.then(state=>{
+							//nothing. Password is updated.
+						})
+						.catch(error=>{
+						client.end();
+							console.log(error);
+							return reject("Database error!");
+						})
+						return mailSender.sendMail(
+							"ARMA PASSWORD RESET",
+							"Hey there!, You can login to ARMA using the temporary password: " + tempPass,
+							email
+						);
+					})
+					.then((mailStatus)=>{
+						client.end();
+						return resolve(mailStatus);
+					})
+					.catch(error=>{
+						client.end();
+						console.log(error);
+						return reject("error hashing new password!");
+					})
+				})
+				.catch(error=>{
+						client.end();
+					console.log(error);
+					return reject(error);
+				})
+			}
+	});
+}
+
 //--------------------------------------------------------//
 //-----------REGISTRATION HANDLING------------------------//
 //--------------------------------------------------------//
@@ -191,29 +312,34 @@ async function registerForum(forum_name, password, email, phone) {
   return new Promise((resolve, reject) => {
     var client = new Client();
     client.connect();
-    const password_hash = hashPassword(password);
     checkRegistrationStatus(forum_name)
       .then((res) => {
         if (res == true) {
           client.end();
           return resolve(false);
         } else {
-          client
-            .query(
-              "INSERT INTO forums(forum_name,pwd_hash,email,phone_no,actual_name) VALUES ($1,$2,$3,$4,$5);",
-              [
-                forum_name.toUpperCase(),
-                password_hash,
-                email,
-                phone,
-                forum_name,
-              ]
-            )
-            .then((res) => {
-              client.end();
-              return resolve(true);
+          hashPassword(password)
+            .then((password_hash) => {
+              client
+                .query(
+                  "INSERT INTO forums(forum_name,pwd_hash,email,phone_no,actual_name) VALUES ($1,$2,$3,$4,$5);",
+                  [
+                    forum_name.toUpperCase(),
+                    password_hash,
+                    email,
+                    phone,
+                    forum_name,
+                  ]
+                )
+                .then((res) => {
+                  client.end();
+                  return resolve(true);
+                })
+                .catch((err) => reject(err));
             })
-            .catch((err) => reject(err));
+            .catch((error) => {
+              reject(error);
+            });
         }
       })
       .catch((err) => reject(err));
@@ -237,29 +363,31 @@ async function registerFaculty(
 
     faculty_roll = faculty_roll.toUpperCase();
 
-    const password_hash = hashPassword(password);
-
     checkFacultyRegistrationStatus(faculty_roll)
       .then((res) => {
         if (res == true) {
           client.end();
           return resolve(false);
         } else {
-          client
-            .query(
-              "INSERT INTO faculty(faculty_name,faculty_roll,faculty_dept,email,phone_no,pwd_hash) VALUES ($1,$2,$3,$4,$5,$6);",
-              [
-                faculty_name,
-                faculty_roll,
-                faculty_dept,
-                email,
-                phone,
-                password_hash,
-              ]
-            )
-            .then((res) => {
-              client.end();
-              return resolve(true);
+          hashPassword(password)
+            .then((password_hash) => {
+              client
+                .query(
+                  "INSERT INTO faculty(faculty_name,faculty_roll,faculty_dept,email,phone_no,pwd_hash) VALUES ($1,$2,$3,$4,$5,$6);",
+                  [
+                    faculty_name,
+                    faculty_roll,
+                    faculty_dept,
+                    email,
+                    phone,
+                    password_hash,
+                  ]
+                )
+                .then((res) => {
+                  client.end();
+                  return resolve(true);
+                })
+                .catch((err) => reject(err));
             })
             .catch((err) => reject(err));
         }
@@ -320,7 +448,7 @@ async function changeForumUsername(forum_name, newUsername) {
     client.connect();
     forum_name = forum_name.toUpperCase();
     client
-      .query("UPDATE forums SET forum_name=$1 WHERE forum_name=$2", [
+      .query("UPDATE forums SET actual_name=$1 WHERE forum_name=$2", [
         newUsername,
         forum_name,
       ])
@@ -371,15 +499,18 @@ async function changeForumPassword(forum_name, oldPassword, newPassword) {
           if (!stat) return reject(" old password incorrect!");
 
           //old password is correct.
-          const newPasswordHash = hashPassword(newPassword);
-          client
-            .query("UPDATE forums SET pwd_hash=$1 WHERE forum_name=$2", [
-              newPasswordHash,
-              forum_name,
-            ])
-            .then((data) => {
-              client.end();
-              return resolve(true); //successful password update.
+          hashPassword(newPassword)
+            .then((newPasswordHash) => {
+              client
+                .query("UPDATE forums SET pwd_hash=$1 WHERE forum_name=$2", [
+                  newPasswordHash,
+                  forum_name,
+                ])
+                .then((data) => {
+                  client.end();
+                  return resolve(true); //successful password update.
+                })
+                .catch((err) => reject(err));
             })
             .catch((err) => reject(err));
         });
@@ -409,15 +540,18 @@ async function changeFacultyPassword(faculty_roll, oldPassword, newPassword) {
           }
           if (!stat) return reject(" old password incorrect!");
           //old password is correct.
-          const newPasswordHash = hashPassword(newPassword);
-          client
-            .query("UPDATE faculty SET pwd_hash=$1 WHERE faculty_roll=$2", [
-              newPasswordHash,
-              faculty_roll,
-            ])
-            .then((data) => {
-              client.end();
-              return resolve(true); //successful password update.
+          hashPassword(newPassword)
+            .then((newPasswordHash) => {
+              client
+                .query("UPDATE faculty SET pwd_hash=$1 WHERE faculty_roll=$2", [
+                  newPasswordHash,
+                  faculty_roll,
+                ])
+                .then((data) => {
+                  client.end();
+                  return resolve(true); //successful password update.
+                })
+                .catch((err) => reject(err));
             })
             .catch((err) => reject(err));
         });
@@ -483,4 +617,5 @@ module.exports = {
   changeFacultyUsername: changeFacultyUsername,
   changeFacultyPassword: changeFacultyPassword,
   changeFacultyEmail: changeFacultyEmail,
+  forgotPassword: forgotPassword
 };
